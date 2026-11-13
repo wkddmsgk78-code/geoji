@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>거지키우기</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', sans-serif; background: #2b2b2b; color: #eee; display: flex; justify-content: center; min-height: 100vh; }
+  #game { width: 100%; max-width: 420px; padding: 16px; }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 8px; }
+  .stat { display: flex; justify-content: space-between; background: #3a3a3a; padding: 10px 14px; border-radius: 10px; margin-bottom: 8px; }
+  .money { color: #ffd54f; font-weight: bold; font-size: 20px; }
+  #beggar { display: block; margin: 16px auto; font-size: 96px; background: #4a3f35; border: none; border-radius: 50%; width: 170px; height: 170px; cursor: pointer; transition: transform .05s; user-select: none; }
+  #beggar:active { transform: scale(0.93); }
+  #rank { text-align: center; font-size: 18px; margin-bottom: 4px; }
+  #rankBar { height: 10px; background: #444; border-radius: 5px; overflow: hidden; margin-bottom: 14px; }
+  #rankFill { height: 100%; width: 0; background: #8bc34a; transition: width .2s; }
+  h2 { font-size: 16px; margin: 12px 0 6px; }
+  .item { display: flex; justify-content: space-between; align-items: center; background: #3a3a3a; padding: 10px; border-radius: 10px; margin-bottom: 6px; }
+  .item small { color: #aaa; }
+  .item button { background: #ffb300; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; min-width: 90px; }
+  .item button:disabled { background: #666; color: #999; cursor: default; }
+  .pop { position: fixed; color: #ffd54f; font-weight: bold; pointer-events: none; animation: up .8s forwards; }
+  @keyframes up { to { transform: translateY(-60px); opacity: 0; } }
+  #log { font-size: 13px; color: #bbb; text-align: center; min-height: 18px; margin-top: 6px; }
+  #reset { display: block; margin: 16px auto 0; background: none; border: 1px solid #666; color: #888; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="game">
+  <h1>🥫 거지키우기</h1>
+  <div class="stat"><span>보유 금액</span><span class="money" id="money">0원</span></div>
+  <div class="stat"><span>클릭당 / 초당</span><span id="rates">1원 / 0원</span></div>
+
+  <div id="rank">거지</div>
+  <div id="rankBar"><div id="rankFill"></div></div>
+
+  <button id="beggar" title="구걸하기">🧎</button>
+  <div id="log">거지를 눌러서 구걸하세요!</div>
+
+  <h2>🛠 구걸 장비 (클릭당 수입)</h2>
+  <div id="clickItems"></div>
+
+  <h2>💼 부업 (초당 자동 수입)</h2>
+  <div id="autoItems"></div>
+
+  <button id="reset">처음부터 다시하기</button>
+</div>
+
+<script>
+// ===== 게임 데이터 (여기서 아이템/등급 추가·수정하면 됨) =====
+const RANKS = [
+  { name: '거지',        emoji: '🧎', need: 0 },
+  { name: '노숙자',      emoji: '🧍', need: 500 },
+  { name: '폐지 줍는 사람', emoji: '📦', need: 5000 },
+  { name: '알바생',      emoji: '🧑‍🍳', need: 50000 },
+  { name: '직장인',      emoji: '🧑‍💼', need: 500000 },
+  { name: '사장님',      emoji: '😎', need: 5000000 },
+  { name: '건물주',      emoji: '🏢', need: 50000000 },
+  { name: '재벌',        emoji: '🤑', need: 1000000000 },
+];
+
+const CLICK_ITEMS = [
+  { id: 'can',    name: '찌그러진 깡통', desc: '+1원/클릭',   cost: 15,     power: 1 },
+  { id: 'sign',   name: '골판지 팻말',   desc: '+5원/클릭',   cost: 120,    power: 5 },
+  { id: 'guitar', name: '낡은 기타',     desc: '+25원/클릭',  cost: 1200,   power: 25 },
+  { id: 'dog',    name: '귀여운 강아지', desc: '+120원/클릭', cost: 15000,  power: 120 },
+];
+
+const AUTO_ITEMS = [
+  { id: 'paper',  name: '폐지 줍기',     desc: '+2원/초',     cost: 50,     power: 2 },
+  { id: 'busk',   name: '길거리 버스킹', desc: '+15원/초',    cost: 600,    power: 15 },
+  { id: 'store',  name: '편의점 알바',   desc: '+100원/초',   cost: 8000,   power: 100 },
+  { id: 'stock',  name: '주식 투자',     desc: '+800원/초',   cost: 90000,  power: 800 },
+  { id: 'build',  name: '원룸 임대',     desc: '+6000원/초',  cost: 1000000, power: 6000 },
+];
+
+// ===== 상태 =====
+const SAVE_KEY = 'geoji-save-v1';
+let state = { money: 0, total: 0, owned: {} };
+try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if (s) state = s; } catch (e) {}
+
+const $ = id => document.getElementById(id);
+const fmt = n => Math.floor(n).toLocaleString('ko-KR') + '원';
+const count = id => state.owned[id] || 0;
+const price = item => Math.floor(item.cost * Math.pow(1.15, count(item.id)));
+const clickPower = () => 1 + CLICK_ITEMS.reduce((s, i) => s + i.power * count(i.id), 0);
+const autoPower = () => AUTO_ITEMS.reduce((s, i) => s + i.power * count(i.id), 0);
+
+function earn(n) { state.money += n; state.total += n; }
+
+function rankIndex() {
+  let r = 0;
+  RANKS.forEach((rk, i) => { if (state.total >= rk.need) r = i; });
+  return r;
+}
+
+// ===== 화면 그리기 =====
+function buildShop(list, el) {
+  el.innerHTML = '';
+  list.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div><b>${item.name}</b> <small>x<span id="c-${item.id}">0</span></small><br><small>${item.desc}</small></div>
+                     <button id="b-${item.id}"></button>`;
+    el.appendChild(row);
+    row.querySelector('button').onclick = () => buy(item);
+  });
+}
+
+function render() {
+  $('money').textContent = fmt(state.money);
+  $('rates').textContent = `${fmt(clickPower())} / ${fmt(autoPower())}`;
+  [...CLICK_ITEMS, ...AUTO_ITEMS].forEach(item => {
+    $('c-' + item.id).textContent = count(item.id);
+    const b = $('b-' + item.id);
+    b.textContent = fmt(price(item));
+    b.disabled = state.money < price(item);
+  });
+  const r = rankIndex();
+  const rk = RANKS[r], next = RANKS[r + 1];
+  $('beggar').textContent = rk.emoji;
+  $('rank').textContent = next ? `${rk.name} → 다음: ${next.name} (${fmt(next.need)})` : `${rk.name} (최고 등급!)`;
+  $('rankFill').style.width = next ? Math.min(100, (state.total - rk.need) / (next.need - rk.need) * 100) + '%' : '100%';
+}
+
+let lastRank = rankIndex();
+function checkRankUp() {
+  const r = rankIndex();
+  if (r > lastRank) { $('log').textContent = `🎉 승급! 이제 당신은 "${RANKS[r].name}"!`; lastRank = r; }
+}
+
+// ===== 동작 =====
+function buy(item) {
+  const p = price(item);
+  if (state.money < p) return;
+  state.money -= p;
+  state.owned[item.id] = count(item.id) + 1;
+  $('log').textContent = `${item.name} 구매!`;
+  render();
+}
+
+$('beggar').onclick = e => {
+  const n = clickPower();
+  earn(n);
+  const pop = document.createElement('div');
+  pop.className = 'pop';
+  pop.textContent = '+' + fmt(n);
+  pop.style.left = e.clientX + 'px';
+  pop.style.top = e.clientY + 'px';
+  document.body.appendChild(pop);
+  setTimeout(() => pop.remove(), 800);
+  checkRankUp();
+  render();
+};
+
+$('reset').onclick = () => {
+  if (!confirm('정말 처음부터 다시 할까요?')) return;
+  state = { money: 0, total: 0, owned: {} };
+  lastRank = 0;
+  $('log').textContent = '다시 거지가 되었습니다...';
+  render();
+};
+
+// 0.1초마다 자동 수입, 5초마다 저장
+setInterval(() => { earn(autoPower() / 10); checkRankUp(); render(); }, 100);
+setInterval(() => localStorage.setItem(SAVE_KEY, JSON.stringify(state)), 5000);
+
+buildShop(CLICK_ITEMS, $('clickItems'));
+buildShop(AUTO_ITEMS, $('autoItems'));
+render();
+</script>
+</body>
+</html>
